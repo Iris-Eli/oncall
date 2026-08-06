@@ -750,7 +750,8 @@
         { key: 'me', icon: '👤', label: 'My shifts' },
         { key: 'reports', icon: '📈', label: 'Reports' },
         { key: 'overrides', icon: '🔁', label: 'Swaps / Overrides' },
-        { key: 'config', icon: '⚙️', label: 'Config' }
+        { key: 'config', icon: '⚙️', label: 'Config' },
+        { key: 'guide', icon: '❓', label: 'Guide' }
     ];
     function parseRoute() {
         const h = (location.hash || '').replace(/^#\/?/, '');
@@ -791,6 +792,7 @@
             if (page === 'calendar') return renderCalendarPage(el);
             if (page === 'me') return renderMyShiftsPage(el);
             if (page === 'reports') return renderReportsPage(el);
+            if (page === 'guide') return renderGuidePage(el);
             if (page === 'overrides') return renderOverridesPage(el);
             if (page === 'config') return renderConfigPage(el);
             el.innerHTML = '<div class="empty">Not found.</div>';
@@ -1063,6 +1065,42 @@
                 <td>${esc(o.reason)}</td><td class="muted">${esc(o.createdBy)}</td>
             </tr>`).join('') || '<tr><td colspan="6" class="empty">No manual overrides recorded.</td></tr>'}</tbody>
         </table></div></div>`;
+    }
+
+    /* ============================================================================
+       GUIDE — plain-language "what can I do here" for the team
+       ============================================================================ */
+    function renderGuidePage(el) {
+        el.innerHTML = `
+        <div class="page-head"><h1>Guide</h1></div>
+        <p class="muted" style="max-width:680px">The on-call pager rotates through the team automatically. Here's what you can do in this app.</p>
+        <div class="panel"><h2>Who's on call?</h2><div class="body">
+            <p><b>Dashboard</b> shows who has the pager <b>right now</b> and who's <b>up next</b>, plus this week at a glance.
+            <b>Calendar</b> shows the whole month. <b>Schedule</b> is the full list for any date range.</p>
+        </div></div>
+        <div class="panel"><h2>When am I on? — <a href="#/me">My shifts</a></h2><div class="body">
+            <p>Open <b>My shifts</b> and pick your name (it defaults to you if it recognizes your sign-in). You'll see your
+            next shift, your next weekend and next holiday, and a list of everything coming up.</p>
+        </div></div>
+        <div class="panel"><h2>I need someone to cover (vacation, sick, favor)</h2><div class="body">
+            <p>Go to <b>Swaps / Overrides → New override</b>. Pick the shift (date + slot), choose who's covering — a
+            teammate or anyone in the directory — and add a reason. It layers on top of the rotation and is fully
+            reversible: remove it and the shift reverts. Every override is logged on the <b>Reports</b> page.</p>
+        </div></div>
+        <div class="panel"><h2>Get it on my phone / calendar</h2><div class="body">
+            <p>On <b>Schedule</b>, use <b>⬇ .ics</b> to import into Outlook/your phone calendar, or <b>⬇ CSV</b> for a
+            spreadsheet. A <b>daily Teams post</b> also announces who has the pager each morning.</p>
+        </div></div>
+        <div class="panel"><h2>How the rotation works</h2><div class="body">
+            <p>Each week has 6 shifts — Monday–Friday (24h each) and one Weekend (Sat 8am → Mon 8am), handing off at
+            <b>8:00 AM</b>. The pager passes through the team in a fixed order, continuously. Major <b>holidays are
+            auto-balanced</b> each year: nobody covers two holidays in a row, and nobody gets the same holiday two
+            years running — the app trades equal-length shifts so total hours stay even.</p>
+        </div></div>
+        <div class="panel"><h2>Admins — <a href="#/config">Config</a></h2><div class="body">
+            <p>Config holds the roster + order, the start (anchor) date, how far ahead to show, and which holidays are
+            observed. It also publishes the schedule cache the daily Teams post reads.</p>
+        </div></div>`;
     }
 
     /* ============================================================================
