@@ -207,20 +207,9 @@
 
     // ---- Defaults used when SharePoint config lists are empty (first run / not seeded) ----
     const DEFAULT_ROSTER = ['Connor', 'Sedrick', 'Josh', 'Ian', 'Kris'];   // normal rotation order
-    const DEFAULT_ANCHOR = '2026-08-10';   // the original Monday the pure rotation began — never change once live
+    const DEFAULT_ANCHOR = '2026-08-10';   // the Monday the rotation starts — schedule begins here, nothing before it
     const DEFAULT_HORIZON = 15;            // months ahead of today to keep populated
 
-    // One-time manual transition week (Aug 3–10 2026) bridging the old system to the rotation.
-    // Pre-anchor and NOT part of the algorithm — seeded as overrides so the dashboard shows it.
-    const TRANSITION_REASON = 'One-time transition week (old system → rotation)';
-    const DEFAULT_TRANSITION_OVERRIDES = [
-        { date: '2026-08-03', slot: 'Monday', person: 'Josh' },
-        { date: '2026-08-04', slot: 'Tuesday', person: 'Josh' },
-        { date: '2026-08-05', slot: 'Wednesday', person: 'Josh' },   // Josh on call until Thu 8am
-        { date: '2026-08-06', slot: 'Thursday', person: 'Connor' },
-        { date: '2026-08-07', slot: 'Friday', person: 'Sedrick' },
-        { date: '2026-08-08', slot: 'Weekend', person: 'Josh' }      // Sat 8am → Mon 8am (Aug 10)
-    ];
     // Every holiday name the built-in date calculator understands (no dates are ever hardcoded).
     const RECOGNIZED_HOLIDAYS = ["New Year's Day", 'MLK Day', 'Presidents Day', 'Good Friday',
         'Memorial Day', 'Juneteenth', 'Independence Day', 'Labor Day', 'Columbus Day', 'Veterans Day',
@@ -655,12 +644,7 @@
         STATE.holidays = hol.length ? hol.slice() : DEFAULT_OBSERVED.map((n, i) => ({ name: n, observe: 'Yes', sortOrder: i + 1, _spItemId: null }));
         STATE.observed = STATE.holidays.filter(h => String(h.observe).toLowerCase() !== 'no').map(h => h.name);
         STATE.history = hist.map(h => ({ year: Number(h.year), holiday: h.holiday, person: h.engineer, _spItemId: h._spItemId }));
-        STATE.overrides = ovr.length
-            ? ovr.map(o => ({ ...o, _start: toUTC(o.shiftStart) }))
-            : (STATE.usingDefaults ? DEFAULT_TRANSITION_OVERRIDES.map(o => ({
-                shiftStart: o.date + 'T12:00:00Z', shiftEnd: '', slot: o.slot, newEngineer: o.person,
-                originalEngineer: '', reason: TRANSITION_REASON, createdBy: 'setup', _spItemId: null, _start: toUTC(o.date)
-            })) : []);
+        STATE.overrides = ovr.map(o => ({ ...o, _start: toUTC(o.shiftStart) }));
         computeSchedule();
     }
 
@@ -671,13 +655,9 @@
         const anchor = toUTC(STATE.anchor);
         let horizonEnd = addMonths(todayUTC(), STATE.horizon);
         if (horizonEnd < addMonths(anchor, 3)) horizonEnd = addMonths(anchor, 3); // always show at least a bit past anchor
-        // Display begins this week even if that's before the anchor (transition week); rotation stays anchor-phased.
-        const displayStart = todayUTC() < anchor ? mondayOf(todayUTC()) : anchor;
-        const allBase = buildSchedule(engineers, anchor, displayStart, horizonEnd);
-        // Holiday fairness applies only to the algorithmic era (>= anchor). Pre-anchor (transition)
-        // rows are carried through untouched — they're expected to be set by manual overrides.
-        const preRows = allBase.filter(r => r.start < anchor);
-        let working = allBase.filter(r => r.start >= anchor);
+        // Schedule starts at the anchor Monday — nothing is generated before it.
+        const allBase = buildSchedule(engineers, anchor, anchor, horizonEnd);
+        let working = allBase;
 
         const startYear = anchor.getUTCFullYear(), endYear = horizonEnd.getUTCFullYear();
         const allHolidays = [];
@@ -699,7 +679,7 @@
             sol.swaps.forEach(s => swapsAll.push({ ...s, year: y }));
             if (relaxed) STATE.relaxedYears.push(y);
         }
-        working = preRows.concat(working).sort((a, b) => a.start - b.start);
+        working.sort((a, b) => a.start - b.start);
         applyOverrides(working);
         STATE.rows = working; STATE.swaps = swapsAll; STATE.holidaysExpanded = allHolidays;
     }
@@ -762,6 +742,7 @@
         { key: 'dashboard', icon: '📊', label: 'Dashboard' },
         { key: 'schedule', icon: '🗓️', label: 'Schedule' },
         { key: 'calendar', icon: '📅', label: 'Calendar' },
+        { key: 'me', icon: '👤', label: 'My shifts' },
         { key: 'reports', icon: '📈', label: 'Reports' },
         { key: 'overrides', icon: '🔁', label: 'Swaps / Overrides' },
         { key: 'config', icon: '⚙️', label: 'Config' }
@@ -803,6 +784,7 @@
             if (page === 'dashboard') return renderDashboard(el);
             if (page === 'schedule') return renderSchedulePage(el);
             if (page === 'calendar') return renderCalendarPage(el);
+            if (page === 'me') return renderMyShiftsPage(el);
             if (page === 'reports') return renderReportsPage(el);
             if (page === 'overrides') return renderOverridesPage(el);
             if (page === 'config') return renderConfigPage(el);
@@ -835,6 +817,7 @@
 
         const heroColor = cur ? colorFor(cur.person) : 'var(--muted)';
         const hol = cur ? holidayOn(cur) : null;
+        const notStarted = !cur && next && now < next.start; // rotation hasn't begun yet (before the anchor Monday)
 
         el.innerHTML = `
         <div class="page-head"><h1>Dashboard</h1>
@@ -844,8 +827,8 @@
             <div class="avatar" style="background:${heroColor}">${cur ? initials(cur.person) : '—'}</div>
             <div style="flex:1;min-width:200px">
                 <div class="who-sub">ON CALL RIGHT NOW</div>
-                <div class="who-name">${cur ? esc(cur.person) : 'No one scheduled'}</div>
-                <div class="who-sub">${cur ? `${cur.label} shift · ${fmtNiceY(cur.start)} 8:00 AM → ${fmtNiceY(cur.end)} 8:00 AM${hol ? ` · <span style="color:var(--warn)">${esc(hol.name)}</span>` : ''}${cur._override ? ' · <span style="color:var(--warn)">manual override</span>' : ''}` : 'Check the roster / anchor in Config.'}</div>
+                <div class="who-name">${cur ? esc(cur.person) : (notStarted ? 'Rotation not started yet' : 'No one scheduled')}</div>
+                <div class="who-sub">${cur ? `${cur.label} shift · ${fmtNiceY(cur.start)} 8:00 AM → ${fmtNiceY(cur.end)} 8:00 AM${hol ? ` · <span style="color:var(--warn)">${esc(hol.name)}</span>` : ''}${cur._override ? ' · <span style="color:var(--warn)">manual override</span>' : ''}` : (notStarted ? `Begins ${fmtNiceY(next.start)} 8:00 AM with ${esc(next.person)}` : 'Check the roster / anchor in Config.')}</div>
             </div>
             <div style="text-align:right">
                 <div class="who-sub">UP NEXT</div>
@@ -988,7 +971,61 @@
     function calToday() { const t = todayUTC(); calYear = t.getUTCFullYear(); calMonth = t.getUTCMonth(); router(); }
 
     /* ============================================================================
-       REPORTS — hours per person, holiday history, fairness/swap log
+       MY SHIFTS — per-person view (defaults to the signed-in user if their name
+       matches a roster member): next up, upcoming shifts, next weekend/holiday, load.
+       ============================================================================ */
+    let myEngineer = null;
+    function guessMe() {
+        if (myEngineer && STATE.roster.includes(myEngineer)) return myEngineer;
+        const nm = (currentUser?.name || currentUser?.username || '').toLowerCase();
+        return STATE.roster.find(r => nm.includes(r.toLowerCase())) || STATE.roster[0] || null;
+    }
+    function renderMyShiftsPage(el) {
+        const me = guessMe();
+        if (!me) { el.innerHTML = `<div class="page-head"><h1>My shifts</h1></div>${defaultsBanner()}<div class="empty">No roster yet — seed it in <a href="#/config">Config</a>.</div>`; return; }
+        const now = nowUTC();
+        const mine = STATE.rows.filter(r => r.person === me).sort((a, b) => a.start - b.start);
+        const upcoming = mine.filter(r => r.end > now);
+        const past = mine.filter(r => r.end <= now);
+        const cur = mine.find(r => now >= r.start && now < r.end);
+        const next = upcoming.find(r => r.start > now) || upcoming[0];
+        const nextWknd = upcoming.find(r => r.label === 'Weekend');
+        const nextHol = upcoming.find(r => holidayOn(r));
+        const last = past[past.length - 1];
+        const upHours = upcoming.reduce((s, r) => s + r.hours, 0);
+        const c = colorFor(me);
+        el.innerHTML = `
+        <div class="page-head"><h1>My shifts</h1>
+            <div class="actions">
+                <label style="display:flex;align-items:center;gap:6px;margin:0"><span class="muted">Engineer</span>
+                <select style="width:auto" onchange="myEngineer=this.value;router()">${STATE.roster.map(n => `<option ${n === me ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+            </div></div>
+        ${defaultsBanner()}
+        <div class="now-hero">
+            <div class="avatar" style="background:${c}">${initials(me)}</div>
+            <div style="flex:1;min-width:200px">
+                <div class="who-sub">${cur ? 'ON CALL RIGHT NOW' : 'NEXT ON CALL'}</div>
+                <div class="who-name" style="color:${c}">${esc(me)}</div>
+                <div class="who-sub">${cur ? `${cur.label} · until ${fmtNiceY(cur.end)} 8:00 AM` : (next ? `${next.label} · ${fmtNiceY(next.start)} 8:00 AM → ${fmtNiceY(next.end)} 8:00 AM` : 'No upcoming shifts in the horizon')}</div>
+            </div>
+        </div>
+        <div class="tiles">
+            <div class="tile"><div class="k">Next weekend</div><div class="v" style="font-size:18px">${nextWknd ? fmtNice(nextWknd.start) : '—'}</div><div class="sub">${nextWknd ? '48h · ' + fmtNice(nextWknd.start) + ' → ' + fmtNice(addDays(nextWknd.start, 2)) : 'none in horizon'}</div></div>
+            <div class="tile"><div class="k">Next holiday</div><div class="v" style="font-size:18px">${nextHol ? esc(holidayOn(nextHol).name) : '—'}</div><div class="sub">${nextHol ? fmtNiceY(nextHol.start) : 'none in horizon'}</div></div>
+            <div class="tile"><div class="k">Upcoming shifts</div><div class="v">${upcoming.length}</div><div class="sub">${upHours}h total</div></div>
+            <div class="tile"><div class="k">Last on-call</div><div class="v" style="font-size:18px">${last ? fmtNice(last.start) : '—'}</div><div class="sub">${last ? last.label + ' shift' : 'none yet'}</div></div>
+        </div>
+        <div class="panel"><h2>Upcoming shifts — ${esc(me)}</h2><div class="table-wrap"><table>
+            <thead><tr><th>Start</th><th>End</th><th>Slot</th><th>Hrs</th><th>Notes</th></tr></thead>
+            <tbody>${upcoming.slice(0, 20).map(r => {
+                const h = holidayOn(r);
+                return `<tr class="${r._override ? 'ov' : (h ? 'hl' : '')}"><td class="nowrap">${fmtNiceY(r.start)}</td><td class="nowrap">${fmtNiceY(r.end)}</td><td>${r.label}</td><td>${r.hours}</td><td>${[h ? '🎉 ' + esc(h.name) : '', r._override ? '🔁 override' : ''].filter(Boolean).join(' · ')}</td></tr>`;
+            }).join('') || '<tr><td colspan="5" class="empty">No upcoming shifts in the horizon.</td></tr>'}</tbody>
+        </table></div></div>`;
+    }
+
+    /* ============================================================================
+       REPORTS — hours per person, holiday history, fairness/swap log, override log
        ============================================================================ */
     let repFrom = null, repTo = null;
     function renderReportsPage(el) {
@@ -1030,7 +1067,22 @@
             ${STATE.swaps.length ? '<ul style="margin:0;padding-left:18px;line-height:1.7">' + STATE.swaps.map(s =>
                 `<li><b>${esc(s.holiday.name)}</b> (${fmtNiceY(s.holiday.date)}): moved from <b>${esc(s.oldPerson)}</b> to <b>${esc(s.newPerson)}</b>. In exchange ${esc(s.newPerson)} gives up ${fmtNiceY(s.partner.start)} (${s.partner.hours}h-for-${s.partner.hours}h — no change to anyone's total hours).</li>`).join('') + '</ul>'
                 : '<div class="empty">No swaps needed — the base rotation already lands holidays fairly.</div>'}
-        </div></div>`;
+        </div></div>
+        ${overrideLogPanel()}`;
+    }
+    // Chronological audit of every manual override (most recently logged first).
+    function overrideLogPanel() {
+        const log = STATE.overrides.slice().sort((a, b) => new Date(b.createdDate || 0) - new Date(a.createdDate || 0));
+        return `<div class="panel"><h2>Override / swap audit log</h2><div class="table-wrap"><table>
+            <thead><tr><th>Logged</th><th>Shift date</th><th>Slot</th><th>From → To</th><th>Reason</th><th>By</th></tr></thead>
+            <tbody>${log.map(o => `<tr>
+                <td class="nowrap muted">${o.createdDate ? fmtNiceY(new Date(o.createdDate)) : '—'}</td>
+                <td class="nowrap">${o._start ? fmtNiceY(o._start) : esc(String(o.shiftStart).slice(0, 10))}</td>
+                <td>${esc(o.slot)}</td>
+                <td class="nowrap">${o.originalEngineer ? esc(o.originalEngineer) + ' → ' : ''}${personPill(o.newEngineer)}</td>
+                <td>${esc(o.reason)}</td><td class="muted">${esc(o.createdBy)}</td>
+            </tr>`).join('') || '<tr><td colspan="6" class="empty">No manual overrides recorded.</td></tr>'}</tbody>
+        </table></div></div>`;
     }
     function repYear(offset) { const y = todayUTC().getUTCFullYear() + offset; repFrom = `${y}-01-01`; repTo = `${y}-12-31`; router(); }
 
@@ -1262,14 +1314,6 @@
             for (let i = 0; i < RECOGNIZED_HOLIDAYS.length; i++) {
                 const name = RECOGNIZED_HOLIDAYS[i];
                 await store.add('holidays', { name, observe: DEFAULT_OBSERVED.includes(name) ? 'Yes' : 'No', sortOrder: i + 1 });
-            }
-            // One-time transition week (pre-anchor manual bridge)
-            for (const o of DEFAULT_TRANSITION_OVERRIDES) {
-                await store.add('overrides', {
-                    key: `${o.date} | ${o.slot}`, shiftStart: o.date + 'T12:00:00Z', shiftEnd: '', slot: o.slot,
-                    originalEngineer: '', newEngineer: o.person, reason: TRANSITION_REASON,
-                    createdBy: currentUser?.name || 'setup', createdDate: new Date().toISOString()
-                });
             }
             toast('Seeded to SharePoint', 'ok'); await loadAll(true); router(); maybePublish(true);
         } catch (e) { toast('Seed failed: ' + e.message, 'bad'); }
