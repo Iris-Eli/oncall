@@ -1030,40 +1030,15 @@
     }
 
     /* ============================================================================
-       REPORTS — hours per person, holiday history, fairness/swap log, override log
+       REPORTS — holiday assignments, fairness/swap log, override/swap audit log
        ============================================================================ */
-    let repFrom = null, repTo = null;
     function renderReportsPage(el) {
-        if (!repFrom) { const t = todayUTC(); repFrom = fmt(new Date(Date.UTC(t.getUTCFullYear(), 0, 1))); repTo = fmt(new Date(Date.UTC(t.getUTCFullYear(), 11, 31))); }
-        const from = toUTC(repFrom), to = addDays(toUTC(repTo), 1);
-        const rows = rowsInRange(from, to);
-        const hours = {}; STATE.roster.forEach(n => hours[n] = { total: 0, wknd: 0, hol: 0, shifts: 0 });
-        rows.forEach(r => {
-            if (!hours[r.person]) hours[r.person] = { total: 0, wknd: 0, hol: 0, shifts: 0 };
-            hours[r.person].total += r.hours; hours[r.person].shifts++;
-            if (r.label === 'Weekend') hours[r.person].wknd += r.hours;
-            if (holidayOn(r)) hours[r.person].hol++;
-        });
-        const maxH = Math.max(1, ...Object.values(hours).map(h => h.total));
-
-        // Holiday history: computed assignments across the horizon + any saved history rows
+        // Holiday assignments across the horizon (who covers each observed holiday, after fairness swaps)
         const computedHol = STATE.holidaysExpanded.map(h => { const o = ownerAt(STATE.rows, h.date); return { year: h.date.getUTCFullYear(), holiday: h.name, person: o ? o.person : '—', date: h.date }; }).sort((a, b) => a.date - b.date);
 
         el.innerHTML = `
         <div class="page-head"><h1>Reports</h1></div>
         ${defaultsBanner()}
-        <div class="toolbar">
-            <div><label>From</label><input type="date" value="${repFrom}" onchange="repFrom=this.value;router()"></div>
-            <div><label>To</label><input type="date" value="${repTo}" onchange="repTo=this.value;router()"></div>
-            <div style="align-self:flex-end"><button class="btn sm" onclick="repYear(0)">This year</button> <button class="btn sm" onclick="repYear(1)">Next year</button></div>
-        </div>
-        <div class="panel"><h2>Hours per engineer · ${esc(repFrom)} → ${esc(repTo)}</h2><div class="table-wrap"><table>
-            <thead><tr><th>Engineer</th><th>Total hrs</th><th></th><th>Shifts</th><th>Weekend hrs</th><th>Holidays</th></tr></thead>
-            <tbody>${Object.entries(hours).sort((a, b) => b[1].total - a[1].total).map(([n, h]) => `
-                <tr><td>${personPill(n)}</td><td><b>${h.total}</b></td>
-                <td style="width:200px"><div class="bar-track"><div class="bar-fill" style="width:${Math.round(h.total / maxH * 100)}%"></div></div></td>
-                <td>${h.shifts}</td><td>${h.wknd}</td><td>${h.hol}</td></tr>`).join('')}</tbody>
-        </table></div></div>
         <div class="panel"><h2>Holiday assignments</h2><div class="table-wrap"><table>
             <thead><tr><th>Year</th><th>Holiday</th><th>Date</th><th>Engineer</th></tr></thead>
             <tbody>${computedHol.map(h => `<tr><td>${h.year}</td><td>${esc(h.holiday)}</td><td class="nowrap">${fmtNiceY(h.date)}</td><td>${personPill(h.person)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No observed holidays in the horizon.</td></tr>'}</tbody>
@@ -1089,7 +1064,6 @@
             </tr>`).join('') || '<tr><td colspan="6" class="empty">No manual overrides recorded.</td></tr>'}</tbody>
         </table></div></div>`;
     }
-    function repYear(offset) { const y = todayUTC().getUTCFullYear() + offset; repFrom = `${y}-01-01`; repTo = `${y}-12-31`; router(); }
 
     /* ============================================================================
        OVERRIDES (manual swaps) — CRUD against OnCall_Overrides
