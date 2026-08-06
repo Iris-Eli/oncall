@@ -451,9 +451,23 @@
     // Rotation is PHASED to the anchor: anchor Monday === global slot index 0. Display may begin
     // before the anchor (the transition week is pre-anchor); the person for any slot is derived
     // from its offset to the anchor, so a negative (pre-anchor) index is well-defined.
+    // Per-week rotation stride. A week has 6 shifts but the team has n; the shift for slot j of
+    // week w is engineers[(w*stride + j) % n]. stride = 6 (one shift-index per shift) gives a
+    // perfectly continuous hand-off order and is used whenever 6 is coprime to n (e.g. n=5 and n=7,
+    // so their behavior is unchanged). When 6 shares a factor with n (n=3,4,6,8,12,20,…) a fixed slot
+    // like "Weekend" would otherwise land on the same person forever, so we bump to the smallest
+    // larger stride that is coprime to n AND doesn't collide at the week boundary — guaranteeing every
+    // slot type rotates through everyone and nobody is stuck with all the weekends.
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    function rotationStride(n) {
+        let s = SLOTS.length;
+        while (gcd(s, n) !== 1 || (s - 5) % n === 0) { s++; if (s > SLOTS.length + n + 8) return SLOTS.length; }
+        return s;
+    }
     function buildSchedule(engineers, anchor, start, end) {
         const rows = []; const n = engineers.length;
         const anchorMon = mondayOf(anchor);
+        const stride = rotationStride(n);
         let weekMonday = mondayOf(start);
         while (weekMonday <= end) {
             const weekIndex = Math.round((weekMonday - anchorMon) / (7 * 86400000));
@@ -462,7 +476,7 @@
                 const s = addDays(weekMonday, slot.dayOffset);
                 const e = slot.label === 'Weekend' ? addDays(weekMonday, 7) : addDays(s, 1);
                 if (s > end) continue;
-                const globalIdx = weekIndex * SLOTS.length + j;
+                const globalIdx = weekIndex * stride + j;
                 rows.push({ start: s, end: e, label: slot.label, hours: slot.hours, person: engineers[((globalIdx % n) + n) % n] });
             }
             weekMonday = addDays(weekMonday, 7);
