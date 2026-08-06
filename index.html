@@ -638,11 +638,12 @@
         STATE.config = cfg;
         STATE.usingDefaults = eng.length === 0;
         STATE.engineers = eng.length ? eng.slice() : DEFAULT_ROSTER.map((n, i) => ({ name: n, sortOrder: i + 1, active: 'Yes', _spItemId: null }));
-        STATE.roster = STATE.engineers.filter(e => String(e.active).toLowerCase() !== 'no').sort((a, b) => (+a.sortOrder || 0) - (+b.sortOrder || 0)).map(e => e.name);
+        // Dedupe by name (defensive against a list that was seeded more than once).
+        STATE.roster = [...new Set(STATE.engineers.filter(e => String(e.active).toLowerCase() !== 'no').sort((a, b) => (+a.sortOrder || 0) - (+b.sortOrder || 0)).map(e => e.name))];
         STATE.anchor = getConfig('AnchorDate', DEFAULT_ANCHOR).slice(0, 10);
         STATE.horizon = Number(getConfig('HorizonMonths', DEFAULT_HORIZON)) || DEFAULT_HORIZON;
         STATE.holidays = hol.length ? hol.slice() : DEFAULT_OBSERVED.map((n, i) => ({ name: n, observe: 'Yes', sortOrder: i + 1, _spItemId: null }));
-        STATE.observed = STATE.holidays.filter(h => String(h.observe).toLowerCase() !== 'no').map(h => h.name);
+        STATE.observed = [...new Set(STATE.holidays.filter(h => String(h.observe).toLowerCase() !== 'no').map(h => h.name))];
         STATE.history = hist.map(h => ({ year: Number(h.year), holiday: h.holiday, person: h.engineer, _spItemId: h._spItemId }));
         STATE.overrides = ovr.map(o => ({ ...o, _start: toUTC(o.shiftStart) }));
         computeSchedule();
@@ -656,19 +657,23 @@
         let horizonEnd = addMonths(todayUTC(), STATE.horizon);
         if (horizonEnd < addMonths(anchor, 3)) horizonEnd = addMonths(anchor, 3); // always show at least a bit past anchor
         // Schedule starts at the anchor Monday — nothing is generated before it.
-        const allBase = buildSchedule(engineers, anchor, anchor, horizonEnd);
-        let working = allBase;
+        let working = buildSchedule(engineers, anchor, anchor, horizonEnd);
 
         const startYear = anchor.getUTCFullYear(), endYear = horizonEnd.getUTCFullYear();
-        const allHolidays = [];
+        const seen = new Set(), allHolidays = [];
         for (let y = startYear; y <= endYear; y++) {
             for (const name of STATE.observed) {
                 const d = holidayDateForYear(name, y);
-                if (d && d >= anchor && d <= horizonEnd) allHolidays.push({ name, date: d });
+                if (!d || d < anchor || d > horizonEnd) continue;
+                const k = y + '|' + name;
+                if (seen.has(k)) continue; seen.add(k);      // dedupe (defensive — never place a holiday twice)
+                allHolidays.push({ name, date: d });
             }
         }
         allHolidays.sort((a, b) => a.date - b.date);
 
+        // Holiday fairness (KEPT): per year, no two-in-a-row stacking + no same holiday two years
+        // running, tie-broken by the load/repeat penalty. Runs on the deduped holiday list.
         const swapsAll = [];
         for (let y = startYear; y <= endYear; y++) {
             const hols = allHolidays.filter(h => h.date.getUTCFullYear() === y);
@@ -1308,12 +1313,15 @@
     async function seedDefaults() {
         if (!confirm('Create starting roster, anchor, horizon and holidays in SharePoint?')) return;
         try {
-            for (let i = 0; i < DEFAULT_ROSTER.length; i++) await store.add('engineers', { name: DEFAULT_ROSTER[i], sortOrder: i + 1, active: 'Yes' });
-            await store.add('config', { key: 'AnchorDate', value: DEFAULT_ANCHOR });
-            await store.add('config', { key: 'HorizonMonths', value: String(DEFAULT_HORIZON) });
+            // Idempotent: only add what isn't already there, so re-running never creates duplicates.
+            const [eng, cfg, hol] = await Promise.all([store.getAll('engineers', true), store.getAll('config', true), store.getAll('holidays', true)]);
+            const haveEng = new Set(eng.map(e => e.name)), haveCfg = new Set(cfg.map(c => c.key)), haveHol = new Set(hol.map(h => h.name));
+            for (let i = 0; i < DEFAULT_ROSTER.length; i++) if (!haveEng.has(DEFAULT_ROSTER[i])) await store.add('engineers', { name: DEFAULT_ROSTER[i], sortOrder: i + 1, active: 'Yes' });
+            if (!haveCfg.has('AnchorDate')) await store.add('config', { key: 'AnchorDate', value: DEFAULT_ANCHOR });
+            if (!haveCfg.has('HorizonMonths')) await store.add('config', { key: 'HorizonMonths', value: String(DEFAULT_HORIZON) });
             for (let i = 0; i < RECOGNIZED_HOLIDAYS.length; i++) {
                 const name = RECOGNIZED_HOLIDAYS[i];
-                await store.add('holidays', { name, observe: DEFAULT_OBSERVED.includes(name) ? 'Yes' : 'No', sortOrder: i + 1 });
+                if (!haveHol.has(name)) await store.add('holidays', { name, observe: DEFAULT_OBSERVED.includes(name) ? 'Yes' : 'No', sortOrder: i + 1 });
             }
             toast('Seeded to SharePoint', 'ok'); await loadAll(true); router(); maybePublish(true);
         } catch (e) { toast('Seed failed: ' + e.message, 'bad'); }
