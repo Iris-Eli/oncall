@@ -133,7 +133,32 @@
         .muted { color: var(--muted); } .right { text-align: right; } .nowrap { white-space: nowrap; }
         .empty { text-align: center; color: var(--muted); padding: 30px; }
         .drag-handle { cursor: grab; color: var(--faint); }
-        @media (max-width: 760px) { #app { grid-template-columns: 1fr; } #sidebar { position: static; height: auto; } .grid2, .grid3 { grid-template-columns: 1fr; } .cal .day { min-height: 54px; } }
+        @media (max-width: 760px) {
+            #app { grid-template-columns: 1fr; }
+            /* Sidebar becomes a compact sticky top bar with a horizontally-scrollable nav */
+            #sidebar { position: sticky; top: 0; z-index: 30; height: auto; padding: 8px 10px; border-right: none; border-bottom: 1px solid var(--line); }
+            #sidebar .brand { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; margin-bottom: 8px; }
+            #sidebar .brand img.logo-img { max-width: 116px; }
+            #sidebar .brand .brand-sub { display: none; }
+            #sidebar nav { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+            #sidebar nav::-webkit-scrollbar { display: none; }
+            #sidebar nav a { flex: 0 0 auto; margin-bottom: 0; padding: 9px 13px; white-space: nowrap; }
+            #sidebar .who { position: static; margin-top: 8px; padding-top: 8px; text-align: right; }
+            main { padding: 14px 13px 48px; }
+            .grid2, .grid3 { grid-template-columns: 1fr; }
+            .cal { gap: 4px; }
+            .cal .day { min-height: 52px; padding: 4px 5px; }
+            .cal .day .who { font-size: 11px; }
+            .modal-bg { padding: 10px; }
+            .modal .m-body { padding: 14px; }
+            .now-hero { padding: 14px 16px; gap: 12px; }
+            .now-hero .avatar { width: 50px; height: 50px; font-size: 20px; }
+            .now-hero .who-name { font-size: 21px; }
+            .page-head h1 { font-size: 18px; }
+            th, td { padding: 8px 9px; }
+            /* 16px inputs stop iOS Safari from auto-zooming on focus */
+            input, select, textarea { font-size: 16px; }
+        }
     </style>
 </head>
 <body>
@@ -1124,46 +1149,46 @@
         </table></div></div>`;
     }
 
+    let ovShiftList = [];
     function openOverrideModal() {
         if (STATE.usingDefaults) { toast('Seed the roster to SharePoint first (Config).', 'warn'); return; }
-        const today = fmt(todayUTC());
+        const now = nowUTC();
+        ovShiftList = STATE.rows.filter(r => r.end > now).sort((a, b) => a.start - b.start).slice(0, 200);
+        if (!ovShiftList.length) { toast('No upcoming shifts to reassign.', 'warn'); return; }
         openModal(`
-        <div class="m-head"><h3>New override</h3><button class="x" onclick="closeModal()">×</button></div>
+        <div class="m-head"><h3>New swap / override</h3><button class="x" onclick="closeModal()">×</button></div>
         <div class="m-body">
-            <div class="grid2">
-                <div class="field"><label>Shift date (the shift's start day)</label><input type="date" id="ov_date" value="${today}" onchange="ovRefreshOwner()"></div>
-                <div class="field"><label>Slot</label><select id="ov_slot" onchange="ovRefreshOwner()">${SLOTS.map(s => `<option>${s.label}</option>`).join('')}</select></div>
-            </div>
-            <div class="field"><label>Currently assigned to</label><input type="text" id="ov_owner" readonly value="—"></div>
+            <div class="field"><label>Which shift needs covering?</label>
+                <select id="ov_shift" onchange="ovRefreshOwner()">${ovShiftList.map((r, i) => {
+                    const h = holidayOn(r);
+                    return `<option value="${i}">${fmtNiceY(r.start)} · ${r.label}${r.label === 'Weekend' ? ' (Sat→Mon)' : ''} — ${esc(r.person)}${h ? ' · ' + esc(h.name) : ''}</option>`;
+                }).join('')}</select></div>
+            <div class="field"><label>Currently assigned to</label><input type="text" id="ov_owner" readonly value="${esc(ovShiftList[0].person)}"></div>
             <div class="field"><label>Reassign to (roster)</label>
                 <select id="ov_new"><option value="">— pick from roster —</option>${STATE.roster.map(n => `<option>${esc(n)}</option>`).join('')}</select></div>
             <div class="field"><label>…or search the directory (anyone can cover)</label>
                 <input type="text" id="ov_dir" placeholder="Type a name…"><div class="people-results" id="ov_dirRes"></div></div>
-            <div class="field"><label>Reason</label><input type="text" id="ov_reason" placeholder="e.g. Ian on PTO — Kris covering"></div>
+            <div class="field"><label>Reason (optional)</label><input type="text" id="ov_reason" placeholder="e.g. Ian on PTO — Kris covering"></div>
         </div>
-        <div class="m-foot"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOverride()">Save override</button></div>`);
-        setTimeout(() => { ovRefreshOwner(); wirePicker(document.getElementById('ov_dir'), document.getElementById('ov_dirRes'), n => { document.getElementById('ov_new').value = ''; document.getElementById('ov_dir').value = n; }); }, 30);
+        <div class="m-foot"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOverride()">Save</button></div>`);
+        setTimeout(() => wirePicker(document.getElementById('ov_dir'), document.getElementById('ov_dirRes'), n => { document.getElementById('ov_new').value = ''; document.getElementById('ov_dir').value = n; }), 30);
     }
-    function ovCurrentOwner() {
-        const date = toUTC(document.getElementById('ov_date').value); const slot = document.getElementById('ov_slot').value;
-        if (!date) return null;
-        return STATE.rows.find(r => fmt(r.start) === fmt(date) && r.label === slot) || null;
-    }
-    function ovRefreshOwner() { const o = ovCurrentOwner(); document.getElementById('ov_owner').value = o ? o.person : 'No shift starts on that day/slot'; }
+    function ovSelectedRow() { const el = document.getElementById('ov_shift'); return el ? (ovShiftList[+el.value] || null) : null; }
+    function ovRefreshOwner() { const o = ovSelectedRow(); const f = document.getElementById('ov_owner'); if (f) f.value = o ? o.person : '—'; }
     async function saveOverride() {
-        const dateStr = document.getElementById('ov_date').value, slot = document.getElementById('ov_slot').value;
-        const owner = ovCurrentOwner();
+        const row = ovSelectedRow();
         const newEng = document.getElementById('ov_dir').value.trim() || document.getElementById('ov_new').value;
         const reason = document.getElementById('ov_reason').value.trim();
-        if (!owner) { toast('No shift starts on that date + slot. Pick a Monday for a Weekend slot, etc.', 'bad'); return; }
+        if (!row) { toast('Pick a shift to reassign.', 'bad'); return; }
         if (!newEng) { toast('Pick who will cover it.', 'bad'); return; }
+        const dateStr = fmt(row.start);
         const rec = {
-            key: `${dateStr} | ${slot}`, shiftStart: fromDateInput(dateStr), shiftEnd: fromDateInput(fmt(owner.end)),
-            slot, originalEngineer: owner._overrideFrom || owner.person, newEngineer: newEng, reason,
+            key: `${dateStr} | ${row.label}`, shiftStart: fromDateInput(dateStr), shiftEnd: fromDateInput(fmt(row.end)),
+            slot: row.label, originalEngineer: row._overrideFrom || row.person, newEngineer: newEng, reason,
             createdBy: currentUser?.name || currentUser?.username || '', createdDate: new Date().toISOString()
         };
         try {
-            const existing = STATE.overrides.find(o => fmt(o._start) === dateStr && o.slot === slot);
+            const existing = STATE.overrides.find(o => fmt(o._start) === dateStr && o.slot === row.label);
             if (existing && existing._spItemId) await store.update('overrides', existing._spItemId, rec);
             else await store.add('overrides', rec);
             toast('Override saved', 'ok'); closeModal(); await loadAll(true); router(); maybePublish(true);
