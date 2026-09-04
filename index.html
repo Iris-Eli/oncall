@@ -106,6 +106,13 @@
         .now-hero .avatar { width: 62px; height: 62px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800; color: #fff; }
         .now-hero .who-name { font-size: 26px; font-weight: 800; color: #fff; }
         .now-hero .who-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+        .now-hero .who-sub a { color: var(--brand2); font-weight: 600; }
+        /* On-call line bar */
+        .callbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--brand); border-radius: 14px; padding: 14px 20px; margin-bottom: 18px; box-shadow: 0 0 14px var(--glow); }
+        .callbar .k { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--brand2); font-weight: 700; }
+        .callbar .callnum { font-size: 26px; font-weight: 800; color: #fff; margin-top: 2px; letter-spacing: .5px; }
+        .callbar .callnum a { color: #fff; }
+        .callbar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
         /* Week strip */
         .weekstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
         .ws-card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px; position: relative; }
@@ -214,7 +221,7 @@
             schedule: 'OnCall_Schedule'      // derived per-day cache the Teams flow reads (see publishSchedule)
         },
         fieldMappings: {
-            engineers: { name: 'Title', sortOrder: 'SortOrder', active: 'Active' },
+            engineers: { name: 'Title', sortOrder: 'SortOrder', active: 'Active', phone: 'Phone' },
             config: { key: 'Title', value: 'Value' },
             holidays: { name: 'Title', observe: 'Observe', sortOrder: 'SortOrder' },
             history: { key: 'Title', year: 'Year', holiday: 'Holiday', engineer: 'Engineer' },
@@ -223,7 +230,7 @@
                 originalEngineer: 'OriginalEngineer', newEngineer: 'NewEngineer', reason: 'Reason',
                 createdBy: 'CreatedBy', createdDate: 'CreatedDate'
             },
-            schedule: { key: 'Title', date: 'ScheduleDate', engineer: 'Engineer', slot: 'Slot', hours: 'Hours', holiday: 'Holiday', isOverride: 'IsOverride' }
+            schedule: { key: 'Title', date: 'ScheduleDate', engineer: 'Engineer', slot: 'Slot', hours: 'Hours', holiday: 'Holiday', isOverride: 'IsOverride', phone: 'Phone', onCallNumber: 'OnCallNumber' }
         },
         // Numeric/date columns: '' must become null on write (Graph rejects '' for these types).
         nonTextCols: new Set(['SortOrder', 'Year', 'ShiftStart', 'ShiftEnd', 'CreatedDate', 'ScheduleDate', 'Hours']),
@@ -412,6 +419,12 @@
     function hashName(s) { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
     function personPill(name) { const c = colorFor(name); return `<span class="pill" style="background:${c}22;color:${c}">${esc(name || '—')}</span>`; }
     function initials(name) { return String(name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase(); }
+    function phoneOf(name) { return STATE.phoneByName[name] || ''; }
+    function telHref(num) { return 'tel:' + String(num || '').replace(/[^0-9+]/g, ''); }
+    // A tap-to-call link (mobile dials it); '' if no number. `cls` lets callers style it.
+    function phoneLink(num, cls) { num = String(num || '').trim(); return num ? `<a href="${telHref(num)}" class="${cls || ''}">${esc(num)}</a>` : ''; }
+    // Copy-to-clipboard helper for handing out the on-call line
+    function copyText(t) { navigator.clipboard?.writeText(t).then(() => toast('Copied: ' + t, 'ok'), () => toast('Copy failed', 'bad')); }
 
     /* ============================================================================
        ROTATION ALGORITHM — ported from OnCallGenerator_SelfSustaining.osts.
@@ -653,6 +666,8 @@
         overrides: [],      // [{shiftStart, shiftEnd, slot, originalEngineer, newEngineer, reason, _spItemId, ...}]
         config: [],         // raw config kv rows
         rows: [], swaps: [], relaxedYears: [], warnYears: [], holidaysExpanded: [],
+        phoneByName: {},    // engineer name -> phone number
+        onCallNumber: '',   // the shared forwarded on-call line (from config)
         usingDefaults: false
     };
 
@@ -674,6 +689,8 @@
         STATE.observed = [...new Set(STATE.holidays.filter(h => String(h.observe).toLowerCase() !== 'no').map(h => h.name))];
         STATE.history = hist.map(h => ({ year: Number(h.year), holiday: h.holiday, person: h.engineer, _spItemId: h._spItemId }));
         STATE.overrides = ovr.map(o => ({ ...o, _start: toUTC(o.shiftStart) }));
+        STATE.phoneByName = {}; STATE.engineers.forEach(e => { if (e.phone) STATE.phoneByName[e.name] = e.phone; });
+        STATE.onCallNumber = getConfig('OnCallNumber', '');
         computeSchedule();
     }
 
@@ -745,14 +762,14 @@
             const noon = new Date(d.getTime() + 12 * 3600 * 1000);
             const o = ownerAt(STATE.rows, noon); if (!o) continue;
             const hol = STATE.holidaysExpanded.find(h => fmt(h.date) === fmt(d));
-            desired[fmt(d)] = { key: fmt(d), date: fromDateInput(fmt(d)), engineer: o.person, slot: o.label, hours: o.hours, holiday: hol ? hol.name : '', isOverride: o._override ? 'Yes' : 'No' };
+            desired[fmt(d)] = { key: fmt(d), date: fromDateInput(fmt(d)), engineer: o.person, slot: o.label, hours: o.hours, holiday: hol ? hol.name : '', isOverride: o._override ? 'Yes' : 'No', phone: phoneOf(o.person), onCallNumber: STATE.onCallNumber };
         }
         const existing = await store.getAll('schedule', true);
         const byKey = {}; existing.forEach(r => byKey[r.key] = r);
         for (const k of Object.keys(desired)) {
             const want = desired[k], have = byKey[k];
             if (!have) { await store.add('schedule', want); }
-            else if (have.engineer !== want.engineer || have.slot !== want.slot || String(have.holiday || '') !== want.holiday || String(have.isOverride || '') !== want.isOverride) {
+            else if (have.engineer !== want.engineer || have.slot !== want.slot || String(have.holiday || '') !== want.holiday || String(have.isOverride || '') !== want.isOverride || String(have.phone || '') !== want.phone || String(have.onCallNumber || '') !== want.onCallNumber) {
                 await store.update('schedule', have._spItemId, want);
             }
         }
@@ -853,6 +870,9 @@
         const heroColor = cur ? colorFor(cur.person) : 'var(--muted)';
         const hol = cur ? holidayOn(cur) : null;
         const notStarted = !cur && next && now < next.start; // rotation hasn't begun yet (before the anchor Monday)
+        const curPhone = cur ? phoneOf(cur.person) : '';
+        const nextPhone = next ? phoneOf(next.person) : '';
+        const ocn = STATE.onCallNumber;
 
         el.innerHTML = `
         <div class="page-head"><h1>Dashboard</h1>
@@ -864,12 +884,24 @@
                 <div class="who-sub">ON CALL RIGHT NOW</div>
                 <div class="who-name">${cur ? esc(cur.person) : (notStarted ? 'Rotation not started yet' : 'No one scheduled')}</div>
                 <div class="who-sub">${cur ? `${cur.label} shift · ${fmtNiceY(cur.start)} 8:00 AM → ${fmtNiceY(cur.end)} 8:00 AM${hol ? ` · <span style="color:var(--warn)">${esc(hol.name)}</span>` : ''}${cur._override ? ' · <span style="color:var(--warn)">manual override</span>' : ''}` : (notStarted ? `Begins ${fmtNiceY(next.start)} 8:00 AM with ${esc(next.person)}` : 'Check the roster / anchor in Config.')}</div>
+                ${cur && curPhone ? `<div class="who-sub" style="margin-top:6px">📞 ${phoneLink(curPhone)} <span class="muted">(direct)</span></div>` : ''}
             </div>
             <div style="text-align:right">
                 <div class="who-sub">UP NEXT</div>
                 <div style="font-size:18px;font-weight:800;color:#fff">${next ? esc(next.person) : '—'}</div>
-                <div class="who-sub">${next ? `${next.label} · ${fmtNice(next.start)}` : ''}</div>
+                <div class="who-sub">${next ? `${next.label} · ${fmtNice(next.start)}${nextPhone ? ' · ' + phoneLink(nextPhone) : ''}` : ''}</div>
             </div>
+        </div>
+        <div class="callbar">
+            <div>
+                <div class="k">📞 On-call line — give this out</div>
+                <div class="callnum">${ocn ? phoneLink(ocn) : '<span class="muted" style="font-size:15px">Not set — add it in Config → Rotation settings</span>'}</div>
+                <div class="who-sub">Forwards to whoever's on call${cur ? ' (now <b style="color:' + heroColor + '">' + esc(cur.person) + '</b>)' : ''}.</div>
+            </div>
+            ${ocn ? `<div class="actions">
+                <a class="btn primary" href="${telHref(ocn)}">📞 Call</a>
+                <button class="btn" onclick="copyText('${esc(ocn)}')">Copy</button>
+            </div>` : ''}
         </div>
         <div class="tiles">
             <div class="tile"><div class="k">Engineers</div><div class="v">${STATE.roster.length}</div><div class="sub">${esc(STATE.roster.join(', '))}</div></div>
@@ -888,7 +920,11 @@
                     ${r._override ? `<div class="hol" style="color:var(--warn);font-size:10.5px;margin-top:3px">🔁 override</div>` : ''}
                 </div>`;
             }).join('') || '<div class="empty">No shifts this week.</div>'}</div>
-        </div></div>`;
+        </div></div>
+        <div class="panel"><h2>Team — tap to call</h2><div class="table-wrap"><table>
+            <thead><tr><th>Engineer</th><th>Phone</th></tr></thead>
+            <tbody>${STATE.roster.map(n => { const p = phoneOf(n); return `<tr><td>${personPill(n)}${cur && cur.person === n ? ' <span class="badge b-ok">on call</span>' : ''}</td><td>${p ? phoneLink(p) : '<span class="muted">—</span>'}</td></tr>`; }).join('')}</tbody>
+        </table></div></div>`;
     }
     function mondayOf(date) { const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())); const diff = (d.getUTCDay() + 6) % 7; return addDays(d, -diff); }
     async function refreshAll() { store.clear(); try { await loadAll(true); toast('Refreshed from SharePoint', 'ok'); } catch (e) { toast(e.message, 'bad'); } router(); }
@@ -1042,6 +1078,7 @@
                 <div class="who-sub">${cur ? 'ON CALL RIGHT NOW' : 'NEXT ON CALL'}</div>
                 <div class="who-name" style="color:${c}">${esc(me)}</div>
                 <div class="who-sub">${cur ? `${cur.label} · until ${fmtNiceY(cur.end)} 8:00 AM` : (next ? `${next.label} · ${fmtNiceY(next.start)} 8:00 AM → ${fmtNiceY(next.end)} 8:00 AM` : 'No upcoming shifts in the horizon')}</div>
+                ${phoneOf(me) ? `<div class="who-sub" style="margin-top:6px">📞 ${phoneLink(phoneOf(me))}</div>` : ''}
             </div>
         </div>
         <div class="tiles">
@@ -1214,7 +1251,7 @@
         ${STATE.usingDefaults ? '<div class="status warn">Nothing is saved to SharePoint yet — click “Seed defaults to SharePoint” to create the starting roster, anchor and holidays.</div>' : ''}
         <div class="panel"><h2>Roster (rotation order)</h2><div class="body">
             <p class="muted">Order is the rotation order. Position 1 takes the anchor Monday, then it cycles. Deactivate instead of deleting to preserve history.</p>
-            <div class="table-wrap"><table><thead><tr><th>#</th><th>Engineer</th><th>Active</th><th>Order</th><th></th></tr></thead>
+            <div class="table-wrap"><table><thead><tr><th>#</th><th>Engineer</th><th>Phone</th><th>Active</th><th>Order</th><th></th></tr></thead>
             <tbody id="rosterBody">${rosterRowsHtml()}</tbody></table></div>
             <div class="toolbar" style="margin-top:10px">
                 <div style="position:relative"><input type="text" id="cfg_addName" placeholder="Add engineer (type or search directory)…" style="min-width:280px">
@@ -1229,6 +1266,8 @@
                 <div class="field"><label>Horizon (months ahead to keep populated)</label><input type="number" id="cfg_horizon" min="3" max="60" value="${STATE.horizon}"></div>
             </div>
             <div id="cfg_anchorNote" class="muted"></div>
+            <div class="field" style="margin-top:12px"><label>On-call line (the shared number that forwards to whoever's on call — shown on the Dashboard and announced daily in Teams)</label>
+                <input type="tel" id="cfg_oncallnum" placeholder="e.g. (615) 555-0100" value="${esc(STATE.onCallNumber)}" style="max-width:320px"></div>
             <button class="btn primary" onclick="saveSettings()">Save settings</button>
         </div></div>
         <div class="panel"><h2>Observed holidays</h2><div class="body">
@@ -1256,15 +1295,19 @@
     }
     // editable working copy of the roster for the Config page
     let rosterDraft = null;
-    function rosterRowsHtml() {
-        rosterDraft = STATE.engineers.map(e => ({ ...e }));
-        return rosterDraft.sort((a, b) => (+a.sortOrder || 0) - (+b.sortOrder || 0)).map((e, i) => `
-            <tr data-i="${i}">
+    function rosterRowHtml(e, i) {
+        return `<tr data-i="${i}">
                 <td>${i + 1}</td><td>${esc(e.name)}</td>
+                <td><input type="tel" value="${esc(e.phone || '')}" placeholder="phone" style="min-width:130px" onchange="rosterSet(${i},'phone',this.value)"></td>
                 <td><select onchange="rosterSet(${i},'active',this.value)"><option ${String(e.active).toLowerCase() !== 'no' ? 'selected' : ''}>Yes</option><option ${String(e.active).toLowerCase() === 'no' ? 'selected' : ''}>No</option></select></td>
                 <td class="nowrap"><button class="btn sm" onclick="rosterMove(${i},-1)">↑</button> <button class="btn sm" onclick="rosterMove(${i},1)">↓</button></td>
                 <td class="right"><button class="btn sm danger" onclick="rosterRemove(${i})">Remove</button></td>
-            </tr>`).join('');
+            </tr>`;
+    }
+    function rosterRowsHtml() {
+        rosterDraft = STATE.engineers.map(e => ({ ...e }));
+        rosterDraft.sort((a, b) => (+a.sortOrder || 0) - (+b.sortOrder || 0));
+        return rosterDraft.map((e, i) => rosterRowHtml(e, i)).join('');
     }
     function rosterSet(i, k, v) { rosterDraft[i][k] = v; }
     function rosterMove(i, dir) {
@@ -1280,20 +1323,13 @@
         document.getElementById('cfg_addName').value = ''; redrawRoster();
     }
     function redrawRoster() {
-        const body = document.getElementById('rosterBody');
-        body.innerHTML = rosterDraft.map((e, i) => `
-            <tr data-i="${i}">
-                <td>${i + 1}</td><td>${esc(e.name)}</td>
-                <td><select onchange="rosterSet(${i},'active',this.value)"><option ${String(e.active).toLowerCase() !== 'no' ? 'selected' : ''}>Yes</option><option ${String(e.active).toLowerCase() === 'no' ? 'selected' : ''}>No</option></select></td>
-                <td class="nowrap"><button class="btn sm" onclick="rosterMove(${i},-1)">↑</button> <button class="btn sm" onclick="rosterMove(${i},1)">↓</button></td>
-                <td class="right"><button class="btn sm danger" onclick="rosterRemove(${i})">Remove</button></td>
-            </tr>`).join('');
+        document.getElementById('rosterBody').innerHTML = rosterDraft.map((e, i) => rosterRowHtml(e, i)).join('');
     }
     async function saveRoster() {
         try {
             // adds/updates
             for (const e of rosterDraft) {
-                const rec = { name: e.name, sortOrder: e.sortOrder, active: e.active || 'Yes' };
+                const rec = { name: e.name, sortOrder: e.sortOrder, active: e.active || 'Yes', phone: e.phone || '' };
                 if (e._spItemId) await store.update('engineers', e._spItemId, rec);
                 else await store.add('engineers', rec);
             }
@@ -1314,6 +1350,7 @@
         try {
             await upsertConfig('AnchorDate', document.getElementById('cfg_anchor').value);
             await upsertConfig('HorizonMonths', String(document.getElementById('cfg_horizon').value));
+            await upsertConfig('OnCallNumber', document.getElementById('cfg_oncallnum').value.trim());
             toast('Settings saved', 'ok'); await loadAll(true); router(); maybePublish(true);
         } catch (e) { toast('Save failed: ' + e.message, 'bad'); }
     }
