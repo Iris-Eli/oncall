@@ -957,9 +957,9 @@
             <tbody>${rows.map(r => {
                 const h = holidayOn(r);
                 const cls = r._override ? 'ov' : (h ? 'hl' : '');
+                const isFairnessTrade = STATE.swaps.some(s => fmt(s.holiday.date) === fmt(r.start) || fmt(s.partner.start) === fmt(r.start));
                 const note = [h ? `🎉 ${esc(h.name)}` : '', r._override ? `🔁 override (was ${esc(r._overrideFrom)})${r._override.reason ? ' · ' + esc(r._override.reason) : ''}` : '',
-                    STATE.swaps.some(s => fmt(s.holiday.date) === fmt(r.start)) ? 'holiday swap' : '',
-                    STATE.swaps.some(s => fmt(s.partner.start) === fmt(r.start)) ? 'traded shift' : ''].filter(Boolean).join(' · ');
+                    isFairnessTrade ? 'Holiday Fairness Shift Trade' : ''].filter(Boolean).join(' · ');
                 return `<tr class="${cls}"><td class="nowrap">${fmtNiceY(r.start)}</td><td class="nowrap">${fmtNiceY(r.end)}</td><td>${r.label}</td><td>${personPill(r.person)}</td><td>${r.hours}</td><td>${note}</td></tr>`;
             }).join('') || '<tr><td colspan="6" class="empty">No shifts in this range.</td></tr>'}</tbody>
         </table></div></div>`;
@@ -971,7 +971,8 @@
         let csv = 'Start,End,Slot,Engineer,Hours,Holiday,Note\n';
         rows.forEach(r => {
             const h = holidayOn(r);
-            const note = r._override ? `override (was ${r._overrideFrom})` : '';
+            const note = r._override ? `override (was ${r._overrideFrom})`
+                : (STATE.swaps.some(s => fmt(s.holiday.date) === fmt(r.start) || fmt(s.partner.start) === fmt(r.start)) ? 'Holiday Fairness Shift Trade' : '');
             csv += `${fmt(r.start)} 08:00,${fmt(r.end)} 08:00,${r.label},${r.person},${r.hours},${h ? h.name : ''},${note}\n`;
         });
         downloadBlob(csv, 'text/csv', 'oncall_schedule.csv');
@@ -1091,7 +1092,8 @@
             <thead><tr><th>Start</th><th>End</th><th>Slot</th><th>Hrs</th><th>Notes</th></tr></thead>
             <tbody>${upcoming.slice(0, 20).map(r => {
                 const h = holidayOn(r);
-                return `<tr class="${r._override ? 'ov' : (h ? 'hl' : '')}"><td class="nowrap">${fmtNiceY(r.start)}</td><td class="nowrap">${fmtNiceY(r.end)}</td><td>${r.label}</td><td>${r.hours}</td><td>${[h ? '🎉 ' + esc(h.name) : '', r._override ? '🔁 override' : ''].filter(Boolean).join(' · ')}</td></tr>`;
+                const ft = STATE.swaps.some(s => fmt(s.holiday.date) === fmt(r.start) || fmt(s.partner.start) === fmt(r.start));
+                return `<tr class="${r._override ? 'ov' : (h ? 'hl' : '')}"><td class="nowrap">${fmtNiceY(r.start)}</td><td class="nowrap">${fmtNiceY(r.end)}</td><td>${r.label}</td><td>${r.hours}</td><td>${[h ? '🎉 ' + esc(h.name) : '', r._override ? '🔁 override' : '', ft ? 'Holiday Fairness Shift Trade' : ''].filter(Boolean).join(' · ')}</td></tr>`;
             }).join('') || '<tr><td colspan="5" class="empty">No upcoming shifts in the horizon.</td></tr>'}</tbody>
         </table></div></div>`;
     }
@@ -1110,7 +1112,7 @@
             <thead><tr><th>Year</th><th>Holiday</th><th>Date</th><th>Engineer</th></tr></thead>
             <tbody>${computedHol.map(h => `<tr><td>${h.year}</td><td>${esc(h.holiday)}</td><td class="nowrap">${fmtNiceY(h.date)}</td><td>${personPill(h.person)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No observed holidays in the horizon.</td></tr>'}</tbody>
         </table></div></div>
-        <div class="panel"><h2>Why these holiday swaps happened</h2><div class="body">
+        <div class="panel"><h2>Holiday Fairness Shift Trades</h2><div class="body">
             ${STATE.swaps.length ? '<ul style="margin:0;padding-left:18px;line-height:1.7">' + STATE.swaps.map(s =>
                 `<li><b>${esc(s.holiday.name)}</b> (${fmtNiceY(s.holiday.date)}): moved from <b>${esc(s.oldPerson)}</b> to <b>${esc(s.newPerson)}</b>. In exchange ${esc(s.newPerson)} gives up ${fmtNiceY(s.partner.start)} (${s.partner.hours}h-for-${s.partner.hours}h — no change to anyone's total hours).</li>`).join('') + '</ul>'
                 : '<div class="empty">No swaps needed — the base rotation already lands holidays fairly.</div>'}
