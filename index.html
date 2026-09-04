@@ -129,6 +129,7 @@
         .cal .day .dnum { color: var(--faint); font-weight: 700; font-size: 11px; }
         .cal .day .who { margin-top: 5px; font-weight: 700; }
         .cal .day .hol { color: var(--warn); font-size: 10.5px; margin-top: 3px; }
+        .cal .day .mk { font-size: 10px; margin-top: 2px; font-weight: 600; }
         /* Bars */
         .bar-track { background: var(--panel2); border-radius: 6px; height: 20px; overflow: hidden; }
         .bar-fill { height: 100%; background: linear-gradient(90deg, var(--brand), var(--brand2)); }
@@ -1020,10 +1021,15 @@
             const isToday = fmt(d) === fmt(t);
             const hol = STATE.holidaysExpanded.find(h => fmt(h.date) === fmt(d));
             const c = owner ? colorFor(owner.person) : 'var(--faint)';
+            const isTrade = owner && STATE.swaps.some(s => fmt(s.holiday.date) === fmt(owner.start) || fmt(s.partner.start) === fmt(owner.start));
+            const mk = owner && owner._override
+                ? `<div class="mk" style="color:var(--warn)" title="Manual override (was ${esc(owner._overrideFrom || '')})">🔁 override</div>`
+                : (isTrade ? `<div class="mk" style="color:var(--brand2)" title="Holiday Fairness Shift Trade">⇄ fairness trade</div>` : '');
             cells += `<div class="day ${inMonth ? '' : 'out'} ${isToday ? 'today' : ''}">
                 <div class="dnum">${d.getUTCDate()}</div>
                 ${owner ? `<div class="who" style="color:${c}">${esc(owner.person)}</div>` : ''}
                 ${hol ? `<div class="hol">🎉 ${esc(hol.name)}</div>` : ''}
+                ${mk}
             </div>`;
         }
         el.innerHTML = `
