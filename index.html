@@ -731,16 +731,46 @@
             if (relaxed) STATE.relaxedYears.push(y);
         }
         working.sort((a, b) => a.start - b.start);
-        applyOverrides(working);
-        STATE.rows = working; STATE.swaps = swapsAll; STATE.holidaysExpanded = allHolidays;
+        STATE.rows = applyOverrides(working);
+        STATE.swaps = swapsAll; STATE.holidaysExpanded = allHolidays;
     }
 
+    // Apply manual overrides on top of the computed rows. Returns a NEW rows array because a weekend
+    // can be SPLIT: a Saturday-only or Sunday-only override turns the single 48h Weekend row into two
+    // 24h rows (Saturday + Sunday) so the two days can go to different people. Weekdays and whole-
+    // weekend overrides just reassign the person in place (weekdays are never split).
     function applyOverrides(rows) {
+        const satOv = {}, sunOv = {}, wkndOv = {}, plainOv = {}; // keyed by date (or date|slot for weekdays)
         STATE.overrides.forEach(ov => {
             const key = String(ov.shiftStart).slice(0, 10);
-            const row = rows.find(r => fmt(r.start) === key && (!ov.slot || r.label === ov.slot));
-            if (row) { row._overrideFrom = row.person; row.person = ov.newEngineer; row._override = ov; }
+            if (ov.slot === 'Saturday') satOv[key] = ov;
+            else if (ov.slot === 'Sunday') sunOv[key] = ov;
+            else if (ov.slot === 'Weekend') wkndOv[key] = ov;
+            else plainOv[key + '|' + ov.slot] = ov;
         });
+        const out = [];
+        for (const r of rows) {
+            if (r.label === 'Weekend') {
+                const satKey = fmt(r.start), sunKey = fmt(addDays(r.start, 1));
+                const sOv = satOv[satKey], uOv = sunOv[sunKey], wOv = wkndOv[satKey];
+                if (sOv || uOv) {   // split the weekend into Sat + Sun
+                    const base = r.person;
+                    const satRow = { start: r.start, end: addDays(r.start, 1), label: 'Saturday', hours: 24, person: (sOv || wOv) ? (sOv || wOv).newEngineer : base };
+                    const sunRow = { start: addDays(r.start, 1), end: r.end, label: 'Sunday', hours: 24, person: (uOv || wOv) ? (uOv || wOv).newEngineer : base };
+                    if (sOv || wOv) { satRow._overrideFrom = base; satRow._override = sOv || wOv; }
+                    if (uOv || wOv) { sunRow._overrideFrom = base; sunRow._override = uOv || wOv; }
+                    out.push(satRow, sunRow);
+                    continue;
+                }
+                if (wOv) { r._overrideFrom = r.person; r.person = wOv.newEngineer; r._override = wOv; } // whole weekend, not split
+                out.push(r);
+                continue;
+            }
+            const ov = plainOv[fmt(r.start) + '|' + r.label];
+            if (ov) { r._overrideFrom = r.person; r.person = ov.newEngineer; r._override = ov; }
+            out.push(r);
+        }
+        return out;
     }
 
     // holiday covering a row, if any (observed)
@@ -1211,6 +1241,13 @@
                     const h = holidayOn(r);
                     return `<option value="${i}">${fmtNiceY(r.start)} · ${r.label}${r.label === 'Weekend' ? ' (Sat→Mon)' : ''} — ${esc(r.person)}${h ? ' · ' + esc(h.name) : ''}</option>`;
                 }).join('')}</select></div>
+            <div class="field" id="ov_portionField" style="display:none"><label>Weekend portion to reassign</label>
+                <select id="ov_portion">
+                    <option value="Weekend">Whole weekend (Sat 8am → Mon 8am)</option>
+                    <option value="Saturday">Saturday only (Sat 8am → Sun 8am)</option>
+                    <option value="Sunday">Sunday only (Sun 8am → Mon 8am)</option>
+                </select>
+                <div class="note" style="font-size:11px;color:var(--faint);margin-top:3px">Split a weekend to give each day to a different person. For both days, save two overrides (one per day).</div></div>
             <div class="field"><label>Currently assigned to</label><input type="text" id="ov_owner" readonly value="${esc(ovShiftList[0].person)}"></div>
             <div class="field"><label>Reassign to (roster)</label>
                 <select id="ov_new"><option value="">— pick from roster —</option>${STATE.roster.map(n => `<option>${esc(n)}</option>`).join('')}</select></div>
@@ -1219,24 +1256,33 @@
             <div class="field"><label>Reason (optional)</label><input type="text" id="ov_reason" placeholder="e.g. Ian on PTO — Kris covering"></div>
         </div>
         <div class="m-foot"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOverride()">Save</button></div>`);
-        setTimeout(() => wirePicker(document.getElementById('ov_dir'), document.getElementById('ov_dirRes'), n => { document.getElementById('ov_new').value = ''; document.getElementById('ov_dir').value = n; }), 30);
+        setTimeout(() => { ovRefreshOwner(); wirePicker(document.getElementById('ov_dir'), document.getElementById('ov_dirRes'), n => { document.getElementById('ov_new').value = ''; document.getElementById('ov_dir').value = n; }); }, 30);
     }
     function ovSelectedRow() { const el = document.getElementById('ov_shift'); return el ? (ovShiftList[+el.value] || null) : null; }
-    function ovRefreshOwner() { const o = ovSelectedRow(); const f = document.getElementById('ov_owner'); if (f) f.value = o ? o.person : '—'; }
+    function ovRefreshOwner() {
+        const o = ovSelectedRow();
+        const f = document.getElementById('ov_owner'); if (f) f.value = o ? o.person : '—';
+        const pf = document.getElementById('ov_portionField'); if (pf) pf.style.display = (o && o.label === 'Weekend') ? 'block' : 'none';
+    }
     async function saveOverride() {
         const row = ovSelectedRow();
         const newEng = document.getElementById('ov_dir').value.trim() || document.getElementById('ov_new').value;
         const reason = document.getElementById('ov_reason').value.trim();
         if (!row) { toast('Pick a shift to reassign.', 'bad'); return; }
         if (!newEng) { toast('Pick who will cover it.', 'bad'); return; }
-        const dateStr = fmt(row.start);
+        // Weekends can be split (Saturday-only / Sunday-only); everything else reassigns the whole shift.
+        const portion = (row.label === 'Weekend') ? (document.getElementById('ov_portion')?.value || 'Weekend') : row.label;
+        let slot = row.label, startD = row.start, endD = row.end;
+        if (portion === 'Saturday') { slot = 'Saturday'; startD = row.start; endD = addDays(row.start, 1); }
+        else if (portion === 'Sunday') { slot = 'Sunday'; startD = addDays(row.start, 1); endD = row.end; }
+        const dateStr = fmt(startD);
         const rec = {
-            key: `${dateStr} | ${row.label}`, shiftStart: fromDateInput(dateStr), shiftEnd: fromDateInput(fmt(row.end)),
-            slot: row.label, originalEngineer: row._overrideFrom || row.person, newEngineer: newEng, reason,
+            key: `${dateStr} | ${slot}`, shiftStart: fromDateInput(dateStr), shiftEnd: fromDateInput(fmt(endD)),
+            slot, originalEngineer: row._overrideFrom || row.person, newEngineer: newEng, reason,
             createdBy: currentUser?.name || currentUser?.username || '', createdDate: new Date().toISOString()
         };
         try {
-            const existing = STATE.overrides.find(o => fmt(o._start) === dateStr && o.slot === row.label);
+            const existing = STATE.overrides.find(o => fmt(o._start) === dateStr && o.slot === slot);
             if (existing && existing._spItemId) await store.update('overrides', existing._spItemId, rec);
             else await store.add('overrides', rec);
             toast('Override saved', 'ok'); closeModal(); await loadAll(true); router(); maybePublish(true);
