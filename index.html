@@ -415,6 +415,22 @@
     function addMonths(d, n) { const r = new Date(d); r.setUTCMonth(r.getUTCMonth() + n); return r; }
     function todayUTC() { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())); }
     function nowUTC() { return new Date(); }
+    // --- US Central time (shifts hand off at 8:00 AM Central, NOT UTC). Intl handles CST/CDT (DST). ---
+    function centralParts(when) {
+        const p = {}; new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+            .formatToParts(when || new Date()).forEach(x => p[x.type] = x.value);
+        return { y: +p.year, m: +p.month, d: +p.day, hour: +p.hour };
+    }
+    function centralToday() { const p = centralParts(); return new Date(Date.UTC(p.y, p.m - 1, p.d)); } // the current Central calendar day (UTC-midnight)
+    // The instant that identifies the CURRENT on-call shift: the Central calendar day whose 8am→8am
+    // window we're in (before 8am Central it's still the previous day's shift), as noon-UTC of that
+    // day so it lands inside that day's schedule row (weekday row, or the Sat/Sun of a weekend row).
+    function shiftNow() {
+        const p = centralParts();
+        let day = new Date(Date.UTC(p.y, p.m - 1, p.d));
+        if (p.hour < 8) day = addDays(day, -1);
+        return new Date(day.getTime() + 12 * 3600 * 1000);
+    }
     function toast(msg, kind = '') { const t = document.createElement('div'); t.className = 't ' + kind; t.textContent = msg; document.getElementById('toast').appendChild(t); setTimeout(() => t.remove(), 4200); }
     function colorFor(name) { const i = STATE.roster.indexOf(name); return PALETTE[i >= 0 ? i % PALETTE.length : (hashName(name) % PALETTE.length)]; }
     function hashName(s) { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff; return h; }
@@ -787,7 +803,7 @@
        --------------------------------------------------------------------------- */
     async function publishSchedule(days = 120) {
         if (STATE.usingDefaults) return;                 // nothing seeded yet — nothing to publish
-        const start = todayUTC(), end = addDays(start, days);
+        const start = addDays(centralToday(), -1), end = addDays(start, days); // from yesterday (Central) so UTC/Central skew never prunes today's row
         const desired = {};
         for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
             const noon = new Date(d.getTime() + 12 * 3600 * 1000);
@@ -891,7 +907,7 @@
        DASHBOARD
        ============================================================================ */
     function renderDashboard(el) {
-        const now = nowUTC();
+        const now = shiftNow(); // Central, 8am handoff — "on call right now" must follow US Central
         const cur = ownerAt(STATE.rows, now);
         const weekMon = mondayOf(now);
         const week = STATE.rows.filter(r => r.start >= weekMon && r.start < addDays(weekMon, 7)).sort((a, b) => a.start - b.start);
@@ -937,7 +953,7 @@
         <div class="tiles">
             <div class="tile"><div class="k">Engineers</div><div class="v">${STATE.roster.length}</div><div class="sub">${esc(STATE.roster.join(', '))}</div></div>
             <div class="tile"><div class="k">Holidays observed</div><div class="v">${STATE.observed.length}</div><div class="sub">auto-balanced each year</div></div>
-            <div class="tile"><div class="k">Active overrides</div><div class="v">${STATE.overrides.filter(o => o._start && o._start >= todayUTC()).length}</div><div class="sub">upcoming manual swaps</div></div>
+            <div class="tile"><div class="k">Active overrides</div><div class="v">${STATE.overrides.filter(o => o._start && o._start >= centralToday()).length}</div><div class="sub">upcoming manual swaps</div></div>
             <div class="tile"><div class="k">Horizon</div><div class="v">${STATE.horizon}mo</div><div class="sub">anchor ${esc(STATE.anchor)}</div></div>
         </div>
         <div class="panel"><h2>This week</h2><div class="body">
@@ -965,7 +981,7 @@
        ============================================================================ */
     let schedFrom = null, schedTo = null;
     function renderSchedulePage(el) {
-        if (!schedFrom) { schedFrom = fmt(mondayOf(todayUTC())); schedTo = fmt(addDays(mondayOf(todayUTC()), 56)); }
+        if (!schedFrom) { schedFrom = fmt(mondayOf(centralToday())); schedTo = fmt(addDays(mondayOf(centralToday()), 56)); }
         const from = toUTC(schedFrom), to = addDays(toUTC(schedTo), 1);
         const rows = rowsInRange(from, to).sort((a, b) => a.start - b.start);
         const adjacency = checkAdjacency(STATE.rows.filter(r => !r._override)); // manual overrides are intentional
@@ -1036,7 +1052,7 @@
        ============================================================================ */
     let calYear = null, calMonth = null;
     function renderCalendarPage(el) {
-        const t = todayUTC();
+        const t = centralToday();
         if (calYear == null) { calYear = t.getUTCFullYear(); calMonth = t.getUTCMonth(); }
         const first = new Date(Date.UTC(calYear, calMonth, 1));
         const gridStart = mondayOf(first);
@@ -1076,7 +1092,7 @@
         </div></div>`;
     }
     function calStep(n) { calMonth += n; if (calMonth < 0) { calMonth = 11; calYear--; } if (calMonth > 11) { calMonth = 0; calYear++; } router(); }
-    function calToday() { const t = todayUTC(); calYear = t.getUTCFullYear(); calMonth = t.getUTCMonth(); router(); }
+    function calToday() { const t = centralToday(); calYear = t.getUTCFullYear(); calMonth = t.getUTCMonth(); router(); }
 
     /* ============================================================================
        MY SHIFTS — per-person view (defaults to the signed-in user if their name
@@ -1091,7 +1107,7 @@
     function renderMyShiftsPage(el) {
         const me = guessMe();
         if (!me) { el.innerHTML = `<div class="page-head"><h1>My shifts</h1></div>${defaultsBanner()}<div class="empty">No roster yet — seed it in <a href="#/config">Config</a>.</div>`; return; }
-        const now = nowUTC();
+        const now = shiftNow(); // Central, 8am handoff — "on call right now" must follow US Central
         const mine = STATE.rows.filter(r => r.person === me).sort((a, b) => a.start - b.start);
         const upcoming = mine.filter(r => r.end > now);
         const past = mine.filter(r => r.end <= now);
@@ -1230,7 +1246,7 @@
     let ovShiftList = [];
     function openOverrideModal() {
         if (STATE.usingDefaults) { toast('Seed the roster to SharePoint first (Config).', 'warn'); return; }
-        const now = nowUTC();
+        const now = shiftNow(); // Central, 8am handoff — "on call right now" must follow US Central
         ovShiftList = STATE.rows.filter(r => r.end > now).sort((a, b) => a.start - b.start).slice(0, 200);
         if (!ovShiftList.length) { toast('No upcoming shifts to reassign.', 'warn'); return; }
         openModal(`
